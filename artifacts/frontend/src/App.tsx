@@ -188,11 +188,11 @@ export default function App() {
       {/* Header */}
       <header className="bg-white border-b border-gray-200 px-6 py-4 flex items-center gap-4">
         <div className="w-8 h-8 rounded-full bg-red-600 flex items-center justify-center">
-          <span className="text-white font-bold text-xs">J&J</span>
+          <span className="text-white font-bold text-xs">K</span>
         </div>
         <div>
           <h1 className="text-lg font-semibold text-gray-900">Shipper Label Generator</h1>
-          <p className="text-xs text-gray-500">Johnson & Johnson — Internal Tool</p>
+          <p className="text-xs text-gray-500">Kenvue — Internal Tool</p>
         </div>
         <div className="ml-auto flex gap-2">
           {(["upload", "review", "done"] as Step[]).map((s, i) => (
