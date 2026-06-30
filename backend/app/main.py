@@ -59,10 +59,12 @@ async def health_check() -> dict:
     return {"status": "healthy"}
 
 
-_STATIC_DIR = os.path.join(
-    os.path.dirname(__file__), "..", "..", "..", "artifacts", "frontend", "dist", "public"
-)
-_STATIC_DIR = os.path.normpath(_STATIC_DIR)
+_STATIC_DIR = os.path.normpath(os.path.join(
+    os.path.dirname(os.path.abspath(__file__)),  # backend/app/
+    "..",                                          # backend/
+    "..",                                          # workspace root
+    "artifacts", "frontend", "dist", "public",
+))
 
 if os.path.isdir(_STATIC_DIR):
     app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")
