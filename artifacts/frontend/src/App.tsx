@@ -76,7 +76,13 @@ export default function App() {
         body: form,
       });
 
-      const json: ExtractResponse = await res.json();
+      let json: ExtractResponse;
+      try {
+        json = await res.json();
+      } catch {
+        toast.error(`Server error (${res.status}) — check that the backend is running`);
+        return;
+      }
 
       if (!res.ok) {
         toast.error((json as any).detail || "Extraction failed");
@@ -120,7 +126,13 @@ export default function App() {
         body: JSON.stringify(merged),
       });
 
-      const json: GenerateResponse = await res.json();
+      let json: GenerateResponse;
+      try {
+        json = await res.json();
+      } catch {
+        toast.error(`Server error (${res.status}) — check that the backend is running`);
+        return;
+      }
 
       if (!res.ok) {
         toast.error((json as any).detail || "Generation failed");

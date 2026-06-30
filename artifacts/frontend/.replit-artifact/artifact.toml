@@ -19,12 +19,7 @@ run = "pnpm --filter @workspace/frontend run dev"
 
 [services.production]
 build = [ "pnpm", "--filter", "@workspace/frontend", "run", "build" ]
-publicDir = "artifacts/frontend/dist/public"
-serve = "static"
-
-[[services.production.rewrites]]
-from = "/*"
-to = "/index.html"
+run = "bash backend/start.sh"
 
 [services.env]
 PORT = "18130"

@@ -1,9 +1,11 @@
 import logging
+import os
 import sys
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from app.api.routes.health import router as health_router
 from app.api.routes.shipper import router as shipper_router
@@ -55,3 +57,16 @@ app.include_router(shipper_router, prefix="/api/v1")
 @app.get("/api/v1/health")
 async def health_check() -> dict:
     return {"status": "healthy"}
+
+
+_STATIC_DIR = os.path.join(
+    os.path.dirname(__file__), "..", "..", "..", "artifacts", "frontend", "dist", "public"
+)
+_STATIC_DIR = os.path.normpath(_STATIC_DIR)
+
+if os.path.isdir(_STATIC_DIR):
+    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")
+else:
+    @app.get("/{full_path:path}")
+    async def spa_fallback(full_path: str) -> JSONResponse:
+        return JSONResponse({"detail": "Frontend not built yet"}, status_code=503)
