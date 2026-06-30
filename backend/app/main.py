@@ -67,8 +67,17 @@ _STATIC_DIR = os.path.normpath(os.path.join(
 ))
 
 if os.path.isdir(_STATIC_DIR):
-    app.mount("/", StaticFiles(directory=_STATIC_DIR, html=True), name="static")
+    _assets_dir = os.path.join(_STATIC_DIR, "assets")
+    if os.path.isdir(_assets_dir):
+        app.mount("/assets", StaticFiles(directory=_assets_dir), name="assets")
+
+    @app.get("/{full_path:path}")
+    async def serve_spa(full_path: str) -> FileResponse:
+        candidate = os.path.join(_STATIC_DIR, full_path)
+        if full_path and os.path.isfile(candidate):
+            return FileResponse(candidate)
+        return FileResponse(os.path.join(_STATIC_DIR, "index.html"))
 else:
     @app.get("/{full_path:path}")
-    async def spa_fallback(full_path: str) -> JSONResponse:
+    async def spa_not_built(full_path: str) -> JSONResponse:
         return JSONResponse({"detail": "Frontend not built yet"}, status_code=503)
