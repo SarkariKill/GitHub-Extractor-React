@@ -1,0 +1,70 @@
+we don't have to worry about material number exist in db or not just we have to just fill in generated pdf we don't have like so i put put a random material number also. Another thing as soon as file is uploadted to blob it should change stoatus fom uploading to blob to uploaded to blob so we can check it then in azure and finally in last section after generation and upload of pdf below a option should be there 
+
+Find Files by Date Range
+List all files in Azure Blob Storage updated between two dates.
+
+use the below code for refernce
+from azure.storage.blob import BlobServiceClient
+from datetime import datetime
+import os
+
+print("Program started ✅")
+
+
+# -----------------------------
+# Azure connection
+# -----------------------------
+connection_string = os.getenv("AZURE_CONNECTION_STRING")
+container_name = os.getenv("AZURE_CONTAINER_NAME")
+
+print("Connection string loaded ✅")
+print("Container:", container_name)
+
+blob_service_client = BlobServiceClient.from_connection_string(connection_string)
+container_client = blob_service_client.get_container_client(container_name)
+
+
+# -----------------------------
+# Function
+# -----------------------------
+def get_files_between_dates(start_date, end_date):
+
+    start = datetime.strptime(start_date, "%Y-%m-%d")
+    end = datetime.strptime(end_date, "%Y-%m-%d")
+
+    matching_files = []
+
+    blobs = container_client.list_blobs()
+
+    for blob in blobs:
+        last_modified = blob.last_modified.replace(tzinfo=None)
+
+        if start <= last_modified <= end:
+            matching_files.append(blob.name)
+
+    return matching_files
+
+
+# -----------------------------
+# Main run
+# -----------------------------
+if __name__ == "__main__":
+
+    print("Ready to take input ✅")
+
+    start_date = input("Enter start date (YYYY-MM-DD): ")
+    end_date = input("Enter end date (YYYY-MM-DD): ")
+
+    print("Processing...")
+
+    files = get_files_between_dates(start_date, end_date)
+
+    print("\nFiles modified between given dates:\n")
+
+    for f in files:
+        print(f)
+
+
+
+
+and at the end instead of using reddish colour use this color code #1f242e
