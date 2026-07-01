@@ -30,6 +30,7 @@ from app.services.azure_storage import (
 from app.services.database import DatabaseUnavailableError, MaterialNotFoundError, get_material_details
 from app.services.extractor import ExtractionError, extract_formula_data, extract_storage_data
 from app.services.pdf_generator import PDFGenerationError, fill_template
+from app.services.pdf_generator_template2 import fill_template2
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
@@ -167,7 +168,10 @@ async def generate_shipper_label(
     output_path = os.path.join(tmp_dir, f"{document_id}.pdf")
 
     try:
-        fill_template(final_data, TEMPLATE_PATH, output_path)
+        if input_data.template == "2":
+            fill_template2(final_data, output_path)
+        else:
+            fill_template(final_data, TEMPLATE_PATH, output_path)
     except PDFGenerationError as e:
         logger.error("PDF generation failed: %s", str(e))
         shutil.rmtree(tmp_dir, ignore_errors=True)

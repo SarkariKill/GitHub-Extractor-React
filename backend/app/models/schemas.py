@@ -26,19 +26,24 @@ class ShipperData(BaseModel):
     expiration_date: str | None = None
     active_ingredient: str | None = None
     distributed_by: str = DISTRIBUTED_BY
+    country_of_origin_active: str = "N/A"
+    special_requirements: str = "N/A"
 
 
 class ShipperDataInput(BaseModel):
+    template: str = "1"
     product_name: str
     gtin: str
     quantity: str
     inner_pack: str
     material_number: str
-    label_specification: str
-    storage_requirements: str
-    batch_number: str
-    expiration_date: str
-    active_ingredient: str
+    label_specification: str = ""
+    storage_requirements: str = ""
+    batch_number: str = ""
+    expiration_date: str = ""
+    active_ingredient: str = ""
+    country_of_origin_active: str = "N/A"
+    special_requirements: str = "N/A"
 
     @field_validator("material_number")
     @classmethod
@@ -53,10 +58,7 @@ class ShipperDataInput(BaseModel):
     @classmethod
     def sanitize_batch_number(cls, v: str) -> str:
         import re
-        sanitized = re.sub(r"[^a-zA-Z0-9_\-]", "", v)
-        if not sanitized:
-            raise ValueError("batch_number contains no valid characters")
-        return sanitized
+        return re.sub(r"[^a-zA-Z0-9_\-]", "", v)
 
 
 class ExtractResponse(BaseModel):
