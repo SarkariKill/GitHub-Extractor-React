@@ -7,6 +7,22 @@ type Step = "upload" | "review" | "done";
 type TemplateId = "1" | "2";
 type UploadStatus = "uploading" | "uploaded" | "failed" | "unknown";
 
+interface FieldDef {
+  field_key: string;
+  label: string;
+  field_type: "text" | "date" | "number";
+  placeholder: string;
+  required: boolean;
+  readonly: boolean;
+  order: number;
+}
+
+interface SchemaResponse {
+  templates: Record<string, FieldDef[]>;
+  source: "azure" | "fallback";
+  cached_at: number;
+}
+
 interface MissingField { field: string; label: string; }
 
 interface ShipperData {
@@ -17,6 +33,7 @@ interface ShipperData {
   distributed_by: string;
   country_of_origin_active: string;
   special_requirements: string;
+  [key: string]: string | null | undefined;
 }
 
 interface ExtractResponse { success: boolean; data: ShipperData; missing_fields: MissingField[]; }
@@ -25,52 +42,67 @@ interface GenerateResponse {
   file_name: string; blob_path: string; download_url: string;
 }
 
-// Template field definitions
-const T1_FIELDS: { key: keyof ShipperData; label: string; readonly?: boolean }[] = [
-  { key: "product_name",         label: "Product Name" },
-  { key: "gtin",                 label: "GTIN" },
-  { key: "material_number",      label: "Material Number", readonly: true },
-  { key: "quantity",             label: "Quantity per Case" },
-  { key: "inner_pack",           label: "Inner Pack" },
-  { key: "label_specification",  label: "Label Specification" },
-  { key: "active_ingredient",    label: "Active Ingredient" },
-  { key: "storage_requirements", label: "Storage Requirements" },
-  { key: "batch_number",         label: "Batch Number" },
-  { key: "expiration_date",      label: "Expiration Date" },
-  { key: "distributed_by",       label: "Distributed By", readonly: true },
-];
-
-const T2_FIELDS: { key: keyof ShipperData; label: string; readonly?: boolean }[] = [
-  { key: "product_name",              label: "Product Name, Description, and Size" },
-  { key: "quantity",                  label: "Quantity per Case" },
-  { key: "inner_pack",                label: "Inner Pack" },
-  { key: "material_number",           label: "Product Code", readonly: true },
-  { key: "gtin",                      label: "Shipper GTIN Barcode and Human Readable" },
-  { key: "batch_number",              label: "Batch/Lot Code" },
-  { key: "expiration_date",           label: "Expiration Date" },
-  { key: "storage_requirements",      label: "Storage Requirements" },
-  { key: "distributed_by",            label: "Distributed By", readonly: true },
-  { key: "country_of_origin_active",  label: "Country of Origin of Active" },
-  { key: "special_requirements",      label: "Special Requirements" },
-];
-
-// Fields NOT relevant for template 2 missing-field checks
-const T2_EXCLUDED_MISSING = new Set(["label_specification", "active_ingredient"]);
-
 export default function App() {
   const [step, setStep] = useState<Step>("upload");
   const [template, setTemplate] = useState<TemplateId>("1");
+
+  // Dynamic schema from Excel
+  const [schema, setSchema] = useState<Record<string, FieldDef[]> | null>(null);
+  const [schemaSource, setSchemaSource] = useState<"azure" | "fallback" | null>(null);
+  const [schemaLoading, setSchemaLoading] = useState(true);
+
   const [materialNumber, setMaterialNumber] = useState("");
   const [formulaPdf, setFormulaPdf] = useState<File | null>(null);
   const [storagePdf, setStoragePdf] = useState<File | null>(null);
   const [extractedData, setExtractedData] = useState<ShipperData | null>(null);
   const [missingFields, setMissingFields] = useState<MissingField[]>([]);
-  const [editedData, setEditedData] = useState<Partial<ShipperData>>({});
+  const [editedData, setEditedData] = useState<Record<string, string>>({});
   const [extracting, setExtracting] = useState(false);
   const [generating, setGenerating] = useState(false);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>("unknown");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Load schema from backend on mount
+  useEffect(() => {
+    async function loadSchema() {
+      setSchemaLoading(true);
+      try {
+        const res = await fetch("/api/v1/templates/schema");
+        if (res.ok) {
+          const json: SchemaResponse = await res.json();
+          setSchema(json.templates);
+          setSchemaSource(json.source);
+        }
+      } catch {
+        // schema stays null → fallback handled in activeFields
+      } finally {
+        setSchemaLoading(false);
+      }
+    }
+    loadSchema();
+  }, []);
+
+  async function refreshSchema() {
+    try {
+      const res = await fetch("/api/v1/templates/schema?refresh=true");
+      if (res.ok) {
+        const json: SchemaResponse = await res.json();
+        setSchema(json.templates);
+        setSchemaSource(json.source);
+        toast.success("Schema refreshed from Azure");
+      }
+    } catch {
+      toast.error("Could not refresh schema");
+    }
+  }
+
+  // Active fields for current template — driven entirely by schema
+  const activeFields: FieldDef[] = schema?.[template] ?? [];
+
+  // Missing fields filtered to only active template fields
+  const activeFieldKeys = new Set(activeFields.map(f => f.field_key));
+  const effectiveMissing = missingFields.filter(m => activeFieldKeys.has(m.field));
 
   // Poll upload status after generation
   useEffect(() => {
@@ -91,11 +123,6 @@ export default function App() {
     return () => { if (pollRef.current) clearInterval(pollRef.current); };
   }, [result]);
 
-  // Effective missing fields depend on template
-  const effectiveMissing = template === "2"
-    ? missingFields.filter(m => !T2_EXCLUDED_MISSING.has(m.field))
-    : missingFields;
-
   async function handleExtract() {
     if (!materialNumber.trim()) { toast.error("Please enter a material number"); return; }
     if (!formulaPdf) { toast.error("Please upload the Master Formula PDF"); return; }
@@ -109,24 +136,30 @@ export default function App() {
       const res = await fetch("/api/v1/shipper/extract", { method: "POST", body: form });
       let json: ExtractResponse;
       try { json = await res.json(); }
-      catch { toast.error(`Server error (${res.status}) — check that the backend is running`); return; }
+      catch { toast.error(`Server error (${res.status})`); return; }
       if (!res.ok) { toast.error((json as any).detail || "Extraction failed"); return; }
 
-      // Seed Template 2 defaults if not already set
       const seededData: ShipperData = {
         ...json.data,
         country_of_origin_active: json.data.country_of_origin_active || "N/A",
         special_requirements: json.data.special_requirements || "N/A",
       };
 
+      // Seed empty fields with schema placeholders so they show as editable hints
+      const schemaDefaults: Record<string, string> = {};
+      for (const field of activeFields) {
+        const existing = seededData[field.field_key];
+        if ((!existing || String(existing).trim() === "") && field.placeholder) {
+          // Don't auto-fill — keep as placeholder only
+        }
+      }
+
       setExtractedData(seededData);
       setMissingFields(json.missing_fields);
-      setEditedData({});
+      setEditedData(schemaDefaults);
       setStep("review");
 
-      const effective = template === "2"
-        ? json.missing_fields.filter(m => !T2_EXCLUDED_MISSING.has(m.field))
-        : json.missing_fields;
+      const effective = json.missing_fields.filter(m => activeFieldKeys.has(m.field));
       if (effective.length > 0) toast.warning(`${effective.length} field(s) need manual entry`);
       else toast.success("All fields extracted successfully");
     } catch { toast.error("Network error — is the backend running?"); }
@@ -136,10 +169,12 @@ export default function App() {
   async function handleGenerate() {
     if (!extractedData) return;
     const merged = { ...extractedData, ...editedData };
+
     for (const mf of effectiveMissing) {
-      const val = (merged as any)[mf.field];
+      const val = merged[mf.field];
       if (!val || String(val).trim() === "") { toast.error(`Please fill in: ${mf.label}`); return; }
     }
+
     setGenerating(true);
     try {
       const payload = { ...merged, template };
@@ -148,7 +183,7 @@ export default function App() {
       });
       let json: GenerateResponse;
       try { json = await res.json(); }
-      catch { toast.error(`Server error (${res.status}) — check that the backend is running`); return; }
+      catch { toast.error(`Server error (${res.status})`); return; }
       if (!res.ok) { toast.error((json as any).detail || "Generation failed"); return; }
       setResult(json);
       setStep("done");
@@ -165,7 +200,6 @@ export default function App() {
   }
 
   const mergedData = extractedData ? { ...extractedData, ...editedData } : null;
-  const activeFields = template === "2" ? T2_FIELDS : T1_FIELDS;
   const steps: Step[] = ["upload", "review", "done"];
 
   return (
@@ -181,6 +215,35 @@ export default function App() {
           <h1 className="text-lg font-semibold text-gray-900">Shipper Label Generator</h1>
           <p className="text-xs text-gray-500">Kenvue — Internal Tool</p>
         </div>
+
+        {/* Schema status badge + refresh */}
+        <div className="flex items-center gap-2 ml-4">
+          {!schemaLoading && schemaSource && (
+            <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
+              schemaSource === "azure" ? "bg-green-100 text-green-700" : "bg-yellow-100 text-yellow-700"
+            }`}>
+              {schemaSource === "azure" ? "Schema: Azure" : "Schema: local fallback"}
+            </span>
+          )}
+          {schemaLoading && (
+            <span className="text-xs text-gray-400 flex items-center gap-1">
+              <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+              </svg>
+              Loading schema…
+            </span>
+          )}
+          {!schemaLoading && (
+            <button onClick={refreshSchema} title="Refresh schema from Azure"
+              className="text-xs text-gray-400 hover:text-gray-700 transition-colors p-1 rounded hover:bg-gray-100">
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+              </svg>
+            </button>
+          )}
+        </div>
+
         <div className="ml-auto flex gap-2">
           {steps.map((s, i) => (
             <div key={s} className="flex items-center gap-1">
@@ -209,35 +272,46 @@ export default function App() {
             {/* Template selector */}
             <div className="mb-5">
               <label className="block text-sm font-medium text-gray-700 mb-2">Label Template</label>
-              <div className="grid grid-cols-2 gap-3">
-                {(["1", "2"] as TemplateId[]).map((t) => (
-                  <button
-                    key={t}
-                    onClick={() => setTemplate(t)}
-                    className={`text-left border-2 rounded-lg p-4 transition-all ${
-                      template === t ? "border-2 shadow-sm" : "border-gray-200 hover:border-gray-300"
-                    }`}
-                    style={template === t ? { borderColor: BRAND, backgroundColor: `${BRAND}08` } : {}}
-                  >
-                    <div className="flex items-center gap-2 mb-1">
-                      <div
-                        className="w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0"
-                        style={template === t ? { borderColor: BRAND } : { borderColor: "#d1d5db" }}
+              {schemaLoading ? (
+                <div className="h-24 rounded-lg border border-gray-200 bg-gray-50 flex items-center justify-center">
+                  <span className="text-sm text-gray-400">Loading templates…</span>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  {(["1", "2"] as TemplateId[]).map((t) => {
+                    const fields = schema?.[t];
+                    const count = fields?.length ?? 0;
+                    return (
+                      <button
+                        key={t}
+                        onClick={() => setTemplate(t)}
+                        className={`text-left border-2 rounded-lg p-4 transition-all ${
+                          template === t ? "shadow-sm" : "border-gray-200 hover:border-gray-300"
+                        }`}
+                        style={template === t ? { borderColor: BRAND, backgroundColor: `${BRAND}08` } : {}}
                       >
-                        {template === t && (
-                          <div className="w-2 h-2 rounded-full" style={{ backgroundColor: BRAND }} />
-                        )}
-                      </div>
-                      <span className="text-sm font-semibold text-gray-800">Template {t}</span>
-                    </div>
-                    <p className="text-xs text-gray-500 ml-6">
-                      {t === "1"
-                        ? "Direct Print Label — Technical Information table"
-                        : "Required Print Information — standard compliance table"}
-                    </p>
-                  </button>
-                ))}
-              </div>
+                        <div className="flex items-center gap-2 mb-1">
+                          <div
+                            className="w-4 h-4 rounded-full border-2 flex items-center justify-center flex-shrink-0"
+                            style={template === t ? { borderColor: BRAND } : { borderColor: "#d1d5db" }}
+                          >
+                            {template === t && <div className="w-2 h-2 rounded-full" style={{ backgroundColor: BRAND }} />}
+                          </div>
+                          <span className="text-sm font-semibold text-gray-800">Template {t}</span>
+                          {count > 0 && (
+                            <span className="ml-auto text-xs text-gray-400">{count} fields</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-gray-500 ml-6">
+                          {t === "1"
+                            ? "Direct Print Label — Technical Information table"
+                            : "Required Print Information — standard compliance table"}
+                        </p>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
             </div>
 
             <div className="space-y-5">
@@ -253,7 +327,7 @@ export default function App() {
               <FileUploader label="Master Formula PDF" description="Contains the active ingredient and formula data" file={formulaPdf} onChange={setFormulaPdf} />
               <FileUploader label="Storage & Shipping PDF" description="Contains storage requirements, batch number, and expiration date" file={storagePdf} onChange={setStoragePdf} />
               <button
-                onClick={handleExtract} disabled={extracting}
+                onClick={handleExtract} disabled={extracting || schemaLoading}
                 className="w-full disabled:opacity-50 text-white font-medium py-2.5 rounded-lg text-sm transition-opacity hover:opacity-90"
                 style={{ backgroundColor: BRAND }}
               >
@@ -272,33 +346,50 @@ export default function App() {
                 Template {template}
               </span>
             </div>
-            <p className="text-sm text-gray-500 mb-6">
-              Review extracted data. Fields marked in orange require manual input. Any blank field can be edited before generating.
+            <p className="text-sm text-gray-500 mb-2">
+              Review extracted data. Fields marked in orange require manual input.
             </p>
+            {schemaSource === "fallback" && (
+              <div className="mb-4 flex items-center gap-2 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded-lg px-3 py-2">
+                <svg className="w-3.5 h-3.5 flex-shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v2m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/>
+                </svg>
+                Using local fallback schema — Azure Excel not reachable. Fields shown may differ from your Excel configuration.
+              </div>
+            )}
 
             <div className="space-y-3">
-              {activeFields.map(({ key, label, readonly }) => {
-                const isMissing = effectiveMissing.some((m) => m.field === key);
-                const value = (mergedData as any)[key];
-                return (
-                  <div key={key}>
-                    <label className={`block text-xs font-medium mb-1 ${isMissing ? "text-orange-600" : "text-gray-600"}`}>
-                      {label} {isMissing && <span className="text-orange-500">*required</span>}
-                    </label>
-                    <input
-                      type="text"
-                      value={(editedData as any)[key] ?? value ?? ""}
-                      onChange={(e) => setEditedData((prev) => ({ ...prev, [key]: e.target.value }))}
-                      readOnly={readonly}
-                      className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${
-                        isMissing
-                          ? "border-orange-300 focus:ring-orange-400 bg-orange-50"
-                          : "border-gray-200 bg-gray-50"
-                      } ${readonly ? "opacity-60 cursor-not-allowed" : ""}`}
-                    />
-                  </div>
-                );
-              })}
+              {activeFields.length === 0 ? (
+                <p className="text-sm text-gray-400 text-center py-6">No fields defined for Template {template} in the schema.</p>
+              ) : (
+                activeFields.map((field) => {
+                  const isMissing = effectiveMissing.some(m => m.field === field.field_key);
+                  const value = editedData[field.field_key] ?? mergedData[field.field_key] ?? "";
+                  return (
+                    <div key={field.field_key}>
+                      <label className={`block text-xs font-medium mb-1 ${isMissing ? "text-orange-600" : "text-gray-600"}`}>
+                        {field.label}
+                        {isMissing && <span className="text-orange-500 ml-1">*required</span>}
+                        {field.field_type !== "text" && (
+                          <span className="ml-1 text-gray-400">({field.field_type})</span>
+                        )}
+                      </label>
+                      <input
+                        type={field.field_type === "date" ? "date" : field.field_type === "number" ? "number" : "text"}
+                        value={String(value ?? "")}
+                        placeholder={field.placeholder || undefined}
+                        onChange={(e) => setEditedData(prev => ({ ...prev, [field.field_key]: e.target.value }))}
+                        readOnly={field.readonly}
+                        className={`w-full border rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 ${
+                          isMissing
+                            ? "border-orange-300 focus:ring-orange-400 bg-orange-50"
+                            : "border-gray-200 bg-gray-50 focus:ring-gray-300"
+                        } ${field.readonly ? "opacity-60 cursor-not-allowed" : ""}`}
+                      />
+                    </div>
+                  );
+                })
+              )}
             </div>
 
             <div className="flex gap-3 mt-6">

@@ -1,0 +1,8 @@
+uploads = []
+generated = []
+
+[[outputs]]
+id = "IbGlk1zyabahfWcTForjK"
+uri = "file://template_schema.xlsx"
+type = "table"
+title = "template_schema.xlsx — Upload this to Azure Blob"

@@ -9,6 +9,7 @@ from fastapi.staticfiles import StaticFiles
 
 from app.api.routes.health import router as health_router
 from app.api.routes.shipper import router as shipper_router
+from app.api.routes.template_schema import router as schema_router
 from app.core.config import settings
 from app.models.schemas import ErrorResponse
 
@@ -52,6 +53,7 @@ async def generic_exception_handler(request: Request, exc: Exception) -> JSONRes
 
 app.include_router(health_router, prefix="/api/v1")
 app.include_router(shipper_router, prefix="/api/v1")
+app.include_router(schema_router, prefix="/api/v1")
 
 
 @app.get("/api/v1/health")
