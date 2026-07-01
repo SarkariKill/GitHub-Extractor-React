@@ -6,3 +6,15 @@ id = "IbGlk1zyabahfWcTForjK"
 uri = "file://template_schema.xlsx"
 type = "table"
 title = "template_schema.xlsx — Upload this to Azure Blob"
+
+[[outputs]]
+id = "3Y_3P5UJX6cu_ycRH45Ax"
+uri = "file://template1.xlsx"
+type = "table"
+title = "template1.xlsx — upload to azure: excel/template1.xlsx"
+
+[[outputs]]
+id = "ChSM_CFnoiwtJUqFtCUvE"
+uri = "file://template2.xlsx"
+type = "table"
+title = "template2.xlsx — upload to azure: excel/template2.xlsx"
