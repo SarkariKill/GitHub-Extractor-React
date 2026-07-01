@@ -39,6 +39,7 @@ router = APIRouter()
 TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "templates", "shipper_template.pdf")
 
 _generated_files: dict[str, str] = {}
+_upload_status: dict[str, str] = {}  # "uploading" | "uploaded" | "failed"
 
 
 def _validate_pdf(file: UploadFile) -> None:
@@ -60,10 +61,13 @@ def _sanitize_path_segment(value: str) -> str:
 
 async def _upload_to_azure_background(output_path: str, blob_name: str, document_id: str) -> None:
     """Upload the generated PDF to Azure in the background (non-blocking)."""
+    _upload_status[document_id] = "uploading"
     try:
         await asyncio.to_thread(upload_pdf_to_blob, output_path, blob_name)
+        _upload_status[document_id] = "uploaded"
         logger.info("Background Azure upload completed for document %s → %s", document_id, blob_name)
     except Exception as e:
+        _upload_status[document_id] = "failed"
         logger.error("Background Azure upload failed for document %s: %s", document_id, str(e))
 
 
@@ -92,16 +96,14 @@ async def extract_shipper_data(
     if len(storage_bytes) < 4 or storage_bytes[:4] != b"%PDF":
         raise HTTPException(status_code=415, detail="storage_pdf does not appear to be a valid PDF")
 
+    # DB lookup is best-effort — any material number is accepted
+    db_data: dict = {}
     try:
         db_data = get_material_details(material_number.strip())
     except MaterialNotFoundError:
-        raise HTTPException(status_code=404, detail=f"Material number '{material_number}' not found in database")
-    except DatabaseUnavailableError as e:
-        logger.error("Database unavailable: %s", str(e))
-        raise HTTPException(status_code=503, detail="Database service is currently unavailable")
-    except Exception as e:
-        logger.error("Database error: %s", str(e))
-        raise HTTPException(status_code=500, detail="An unexpected error occurred fetching material data")
+        logger.info("Material number '%s' not in DB — user will fill fields manually", material_number)
+    except (DatabaseUnavailableError, Exception) as e:
+        logger.warning("DB lookup skipped: %s", str(e))
 
     try:
         formula_data = extract_formula_data(formula_bytes)
@@ -181,6 +183,7 @@ async def generate_shipper_label(
     blob_name = f"{folder}/{mat}/{batch}/final_shipper.pdf"
 
     _generated_files[document_id] = output_path
+    _upload_status[document_id] = "uploading"
 
     background_tasks.add_task(_upload_to_azure_background, output_path, blob_name, document_id)
 
@@ -194,6 +197,15 @@ async def generate_shipper_label(
         blob_path=blob_name,
         download_url=f"/api/v1/shipper/download/{document_id}",
     )
+
+
+@router.get("/shipper/status/{document_id}")
+async def get_upload_status(document_id: str) -> dict:
+    """Check the Azure upload status for a generated document."""
+    if not re.match(r"^[a-f0-9\-]{36}$", document_id):
+        raise HTTPException(status_code=400, detail="Invalid document ID")
+    status = _upload_status.get(document_id, "unknown")
+    return {"document_id": document_id, "status": status}
 
 
 @router.get("/shipper/download/{document_id}")
