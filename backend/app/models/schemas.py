@@ -1,4 +1,4 @@
-from pydantic import BaseModel, field_validator
+from pydantic import BaseModel, ConfigDict, field_validator
 
 
 DISTRIBUTED_BY = (
@@ -31,6 +31,7 @@ class ShipperData(BaseModel):
 
 
 class ShipperDataInput(BaseModel):
+    """Legacy fixed-field input — kept for backward compatibility."""
     template: str = "1"
     product_name: str
     gtin: str
@@ -59,6 +60,19 @@ class ShipperDataInput(BaseModel):
     def sanitize_batch_number(cls, v: str) -> str:
         import re
         return re.sub(r"[^a-zA-Z0-9_\-]", "", v)
+
+
+class DynamicShipperInput(BaseModel):
+    """
+    Flexible input for dynamic template generation.
+    Accepts any field submitted by the frontend alongside the required
+    template name and routing fields.
+    """
+    model_config = ConfigDict(extra="allow")
+
+    template: str
+    material_number: str = "unknown"
+    batch_number: str = "unknown"
 
 
 class ExtractResponse(BaseModel):

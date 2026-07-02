@@ -1,0 +1,242 @@
+The website is currently working correctly. Please make only the changes listed below. Do not redesign the application or modify any working functionality unnecessarily.
+1. Clean and reorganize the project structure
+Reorganize the project into two clearly separated folders:
+project-root/
+├── frontend/
+└── backend/
+Requirements:
+* Keep all React.js code inside the frontend folder.
+* Keep all FastAPI code inside the backend folder.
+* Remove unused, duplicate, temporary, generated, or unnecessary files.
+* Remove all Replit-specific files, configurations, comments, scripts, packages, environment references, or branding.
+* The final project must run independently outside Replit.
+* It should be possible to push the project to GitHub, clone it, and run it locally using VS Code.
+* Do not delete any file that is required for the application to work.
+* Do not change the current UI design unless required for the features described below.
+* Update import paths and configuration files only where necessary after restructuring.
+2. Dynamic template selection in Step 1
+Currently, Step 1 allows the user to choose between two fixed templates. Remove this fixed template selection.
+Replace it with a dropdown called:
+Select Template
+The template dropdown must be populated dynamically.
+Requirements:
+* Read all Excel template files available in the configured upload-file container in excel folder.
+* Each Excel file should appear as one option in the dropdown.
+* Use the Excel filename without the .xlsx or .xls extension as the template name.
+* Do not hard-code template names.
+* When a new Excel template is added to the target folder, it should automatically appear in the dropdown without requiring frontend code changes.
+* The selected template name should be sent to the backend and used throughout the remaining workflow.
+* Store or map the template name in the database using the same name as the Excel file.
+Example:
+excel/
+├── Shipper_Label.xlsx
+├── Product_Label.xlsx
+└── Storage_Label.xlsx
+The dropdown should display:
+Shipper_Label
+Product_Label
+Storage_Label
+3. Support dynamic dropdown fields from Excel
+The Excel template already contains field definitions, including a field_type column.
+Some fields may have:
+field_type = dropdown
+The frontend form must be generated dynamically based on the field_type.
+Behaviour:
+* If field_type is text, display a normal text input.
+* If field_type is number, display a number input.
+* If field_type is date, display a date input.
+* If field_type is dropdown, display a dropdown/select input.
+* Continue supporting any existing field types already used by the application.
+Do not hard-code dropdown fields in the frontend.
+4. Create a JSON-based dummy database
+Create one JSON database file that will be shared across all templates.
+Suggested location:
+backend/data/template_values.json
+This JSON file must store values in key-value format.
+For normal fields, the value may be a string, number, boolean, or other single value.
+For dropdown fields, the value must be a list.
+Example:
+{
+  "product_name": "Sample Product",
+  "country": "India",
+  "storage_temperature": [
+    "Store below 25°C",
+    "Store between 2°C and 8°C",
+    "Store in a cool and dry place"
+  ],
+  "package_type": [
+    "Bottle",
+    "Carton",
+    "Pouch"
+  ],
+  "shipping_mode": [
+    "Air",
+    "Road",
+    "Sea"
+  ]
+}
+5. Database value priority and placeholder behaviour
+When generating the form, use the following logic:
+For normal input fields
+* Search for the field key in the JSON database.
+* If the key exists and contains a valid value, use the JSON value as the default input value.
+* If the key does not exist, use the existing Excel dummy value as a placeholder.
+* Do not permanently copy Excel dummy values into the JSON database automatically.
+Example:
+Excel contains:
+field_name: product_name
+dummy_value: Enter product name
+field_type: text
+JSON contains:
+{
+  "product_name": "Johnson Baby Powder"
+}
+The UI should show:
+Johnson Baby Powder
+If product_name is not present in JSON, the UI should show:
+Enter product name
+as a placeholder.
+For dropdown fields
+* Search for the field key in the JSON database.
+* The corresponding JSON value must be a list.
+* Use the list items as dropdown options.
+* The user must be able to select one option.
+* Do not use the Excel dummy value as a dropdown option when a valid list exists in JSON.
+* If the key is missing, the value is not a list, or the list is empty, show a disabled placeholder option such as:
+No options available
+The application should not crash when dropdown data is missing.
+Example:
+Excel contains:
+field_name: package_type
+field_type: dropdown
+dummy_value: Select package type
+JSON contains:
+{
+  "package_type": [
+    "Bottle",
+    "Carton",
+    "Pouch"
+  ]
+}
+The UI should create a dropdown with:
+Select package type
+Bottle
+Carton
+Pouch
+The first option should act as a disabled placeholder and should not be submitted as a valid value.
+6. Backend API requirements
+Create or update backend APIs to support:
+1. Fetching the list of available Excel templates.
+2. Reading the selected Excel template.
+3. Returning the dynamically generated field definitions.
+4. Reading values from the shared JSON database.
+5. Returning dropdown options when field_type is dropdown.
+6. Accepting the final user-selected or user-entered values.
+7. Continuing the existing PDF generation or processing workflow without breaking it.
+Suggested API responses:
+Template list
+{
+  "templates": [
+    "Shipper_Label",
+    "Product_Label",
+    "Storage_Label"
+  ]
+}
+Template fields
+{
+  "template_name": "Shipper_Label",
+  "fields": [
+    {
+      "field_name": "product_name",
+      "label": "Product Name",
+      "field_type": "text",
+      "default_value": "Johnson Baby Powder",
+      "placeholder": "Enter product name"
+    },
+    {
+      "field_name": "package_type",
+      "label": "Package Type",
+      "field_type": "dropdown",
+      "options": [
+        "Bottle",
+        "Carton",
+        "Pouch"
+      ],
+      "placeholder": "Select package type"
+    }
+  ]
+}
+Use the existing Excel column names wherever possible. Do not unnecessarily change the current Excel structure.
+7. Validation and error handling
+Add proper validation for the following cases:
+* No Excel template files are found.
+* The selected template does not exist.
+* The Excel file cannot be read.
+* Required Excel columns are missing.
+* The JSON database file is missing.
+* The JSON file contains invalid JSON.
+* A dropdown key is missing.
+* A dropdown value is not stored as a list.
+* A dropdown list is empty.
+* A required field is not filled.
+* The frontend cannot connect to the backend.
+Display readable error messages instead of raw stack traces.
+8. Keep the existing application stable
+Important constraints:
+* Do not rebuild the project from scratch.
+* Do not replace React.js or FastAPI.
+* Do not change working PDF generation, extraction, upload, or other existing logic unless required for integration.
+* Do not introduce a new database service.
+* For now, use only the shared JSON file as the dummy database.
+* Do not add unnecessary libraries.
+* Reuse existing components and backend functions where possible.
+* Avoid unnecessary code duplication.
+* Make the smallest safe set of changes required.
+* Ensure all existing features continue to work after these changes.
+9. Local execution requirements
+After completing the changes, ensure the project can run locally without Replit.
+Provide or update:
+frontend/package.json
+backend/requirements.txt
+README.md
+.gitignore
+The README should contain exact commands for running the application locally.
+Expected format:
+Backend:
+cd backend
+python -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload
+Frontend:
+cd frontend
+npm install
+npm run dev
+Adjust the commands according to the actual final project structure.
+The .gitignore should include at least:
+node_modules/
+venv/
+.venv/
+__pycache__/
+*.pyc
+.env
+.DS_Store
+dist/
+build/
+Do not include secrets, API keys, credentials, environment variables, generated PDFs, uploaded files, or temporary files in Git.
+10. Final verification
+Before completing the task, verify the following:
+* The React frontend starts successfully.
+* The FastAPI backend starts successfully.
+* The frontend can connect to the backend.
+* Available templates are loaded dynamically from Excel filenames.
+* Selecting a template loads its fields.
+* Normal fields use JSON values when available.
+* Normal fields use Excel dummy values as placeholders when JSON values are unavailable.
+* Dropdown fields load list values from the JSON database.
+* Missing dropdown values are handled safely.
+* User-selected dropdown values are submitted correctly.
+* Existing processing and PDF-generation functionality still works.
+* No Replit-specific dependency or configuration remains.
+* The project can run locally after being cloned from GitHub.
+Please first inspect the existing project and reuse the current working code. Make only the required modifications and do not generate unrelated features.

@@ -1,99 +1,104 @@
 """
 Dynamic template schema service.
 
-Reads two Excel files from Azure Blob Storage:
-  {azure_excel_folder}/template1.xlsx  →  fields for Template 1
-  {azure_excel_folder}/template2.xlsx  →  fields for Template 2
+Reads Excel files from Azure Blob Storage (or a local fallback folder) to
+build the field definitions shown in Step 2 of the UI.
 
-The schema is cached in-memory for `schema_cache_ttl_seconds` (default 5 min)
-so that changes to either Excel propagate to the UI within one cache cycle
-without requiring a backend restart.
+Azure layout (configured via AZURE_BLOB_CONTAINER_NAME + AZURE_EXCEL_FOLDER):
+  {container}/{excel_folder}/template1.xlsx
+  {container}/{excel_folder}/template2.xlsx
+  ...etc — any .xlsx file becomes a selectable template.
 
-Excel format for each file (row 1 = headers, no "template" column needed):
+Local fallback (used when Azure is unavailable or connection string is not set):
+  backend/data/excel/{template_name}.xlsx
+
+Excel columns (row 1 = headers):
   field_key | label | field_type | placeholder | required | readonly | order
 
-  - field_key:    internal key matching ShipperData field names (e.g. "product_name")
-  - label:        display label shown in the UI
-  - field_type:   "text" | "date" | "number"
-  - placeholder:  example / dummy value shown as input hint
-  - required:     "yes" / "no"  (or TRUE/FALSE from Excel)
-  - readonly:     "yes" / "no"
-  - order:        integer — ascending display order
+  field_key   : internal key (e.g. "product_name") — also accepts "field_name"
+  label       : display label shown in the UI
+  field_type  : "text" | "date" | "number" | "dropdown"
+  placeholder : hint / example value
+  required    : yes/no or TRUE/FALSE
+  readonly    : yes/no or TRUE/FALSE
+  order       : integer — ascending display order
+
+Values and dropdown options come from backend/data/template_values.json.
 """
 import io
+import json
 import logging
+import os
 import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Fallback schema (used when Azure is unavailable or blob not found)
-# ---------------------------------------------------------------------------
-_FALLBACK: dict[str, list[dict]] = {
-    "1": [
-        {"field_key": "product_name",        "label": "Product Name",                              "field_type": "text",   "placeholder": "e.g. Tylenol Extra Strength 500mg", "required": True,  "readonly": False, "order": 1},
-        {"field_key": "gtin",                "label": "GTIN",                                      "field_type": "text",   "placeholder": "e.g. 00300450449684",               "required": True,  "readonly": False, "order": 2},
-        {"field_key": "material_number",     "label": "Material Number",                           "field_type": "text",   "placeholder": "",                                  "required": True,  "readonly": True,  "order": 3},
-        {"field_key": "quantity",            "label": "Quantity per Case",                         "field_type": "text",   "placeholder": "e.g. 24 EA",                        "required": True,  "readonly": False, "order": 4},
-        {"field_key": "inner_pack",          "label": "Inner Pack",                                "field_type": "text",   "placeholder": "e.g. 6x4",                         "required": True,  "readonly": False, "order": 5},
-        {"field_key": "label_specification", "label": "Label Specification",                       "field_type": "text",   "placeholder": "e.g. LS-2024-001",                 "required": True,  "readonly": False, "order": 6},
-        {"field_key": "active_ingredient",   "label": "Active Ingredient",                         "field_type": "text",   "placeholder": "e.g. Acetaminophen 500mg",          "required": True,  "readonly": False, "order": 7},
-        {"field_key": "storage_requirements","label": "Storage Requirements",                      "field_type": "text",   "placeholder": "e.g. Store below 25°C",             "required": True,  "readonly": False, "order": 8},
-        {"field_key": "batch_number",        "label": "Batch Number",                              "field_type": "text",   "placeholder": "e.g. B20260101",                   "required": True,  "readonly": False, "order": 9},
-        {"field_key": "expiration_date",     "label": "Expiration Date",                           "field_type": "text",   "placeholder": "e.g. 2028-01",                     "required": True,  "readonly": False, "order": 10},
-        {"field_key": "distributed_by",      "label": "Distributed By",                            "field_type": "text",   "placeholder": "",                                  "required": False, "readonly": True,  "order": 11},
-    ],
-    "2": [
-        {"field_key": "product_name",             "label": "Product Name, Description, and Size",     "field_type": "text", "placeholder": "e.g. Tylenol Extra Strength Caplets 500mg", "required": True,  "readonly": False, "order": 1},
-        {"field_key": "quantity",                 "label": "Quantity per Case",                       "field_type": "text", "placeholder": "e.g. 24 EA",                               "required": True,  "readonly": False, "order": 2},
-        {"field_key": "inner_pack",               "label": "Inner Pack",                              "field_type": "text", "placeholder": "e.g. 6x4",                                 "required": True,  "readonly": False, "order": 3},
-        {"field_key": "material_number",          "label": "Product Code",                            "field_type": "text", "placeholder": "",                                          "required": True,  "readonly": True,  "order": 4},
-        {"field_key": "gtin",                     "label": "Shipper GTIN Barcode and Human Readable", "field_type": "text", "placeholder": "e.g. 10300450449681",                      "required": True,  "readonly": False, "order": 5},
-        {"field_key": "batch_number",             "label": "Batch/Lot Code",                          "field_type": "text", "placeholder": "e.g. B20260101",                           "required": True,  "readonly": False, "order": 6},
-        {"field_key": "expiration_date",          "label": "Expiration Date",                         "field_type": "text", "placeholder": "e.g. 2028-01",                             "required": True,  "readonly": False, "order": 7},
-        {"field_key": "storage_requirements",     "label": "Storage Requirements",                    "field_type": "text", "placeholder": "e.g. Store below 25°C",                    "required": True,  "readonly": False, "order": 8},
-        {"field_key": "distributed_by",           "label": "Distributed By",                          "field_type": "text", "placeholder": "",                                          "required": False, "readonly": True,  "order": 9},
-        {"field_key": "country_of_origin_active", "label": "Country of Origin of Active",             "field_type": "text", "placeholder": "N/A",                                       "required": False, "readonly": False, "order": 10},
-        {"field_key": "special_requirements",     "label": "Special Requirements",                    "field_type": "text", "placeholder": "N/A",                                       "required": False, "readonly": False, "order": 11},
-    ],
-}
+_DATA_DIR = os.path.normpath(
+    os.path.join(os.path.dirname(__file__), "..", "..", "data")
+)
+_LOCAL_EXCEL_DIR = os.path.join(_DATA_DIR, "excel")
+_JSON_DB_PATH = os.path.join(_DATA_DIR, "template_values.json")
 
-# ---------------------------------------------------------------------------
-# In-memory TTL cache
-# ---------------------------------------------------------------------------
-_cache: dict[str, Any] = {
-    "data": None,
-    "fetched_at": 0.0,
-    "source": "none",
-}
+_list_cache: dict[str, Any] = {"data": None, "fetched_at": 0.0}
+_fields_cache: dict[str, dict] = {}
 
 
-def _bool_from_cell(value: Any) -> bool:
+# ---------------------------------------------------------------------------
+# JSON database
+# ---------------------------------------------------------------------------
+
+def _read_json_db() -> dict:
+    if not os.path.exists(_JSON_DB_PATH):
+        logger.warning("template_values.json not found at %s", _JSON_DB_PATH)
+        return {}
+    try:
+        with open(_JSON_DB_PATH, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except json.JSONDecodeError as e:
+        logger.error("Invalid JSON in template_values.json: %s", str(e))
+        return {}
+    except Exception as e:
+        logger.error("Could not read template_values.json: %s", str(e))
+        return {}
+
+
+# ---------------------------------------------------------------------------
+# Excel parsing
+# ---------------------------------------------------------------------------
+
+def _bool_from_cell(value: Any, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     if isinstance(value, str):
         return value.strip().lower() in ("yes", "true", "1", "y")
+    if value is None:
+        return default
     return bool(value)
 
 
-def _parse_excel_for_template(raw_bytes: bytes, template_id: str) -> list[dict]:
-    """
-    Parse a single-template Excel file.
-    Expected headers: field_key | label | field_type | placeholder | required | readonly | order
-    """
+def _parse_excel_bytes(raw_bytes: bytes, template_name: str) -> list[dict]:
     import openpyxl
 
     wb = openpyxl.load_workbook(io.BytesIO(raw_bytes), data_only=True)
     ws = wb.active
-
     rows = list(ws.iter_rows(values_only=True))
-    if not rows:
-        raise ValueError(f"template{template_id}.xlsx is empty")
 
-    headers = [str(h).strip().lower() if h is not None else "" for h in rows[0]]
-    if "field_key" not in headers or "label" not in headers:
-        raise ValueError(f"template{template_id}.xlsx is missing required columns: field_key, label")
+    if not rows:
+        raise ValueError(f"'{template_name}.xlsx' is empty")
+
+    raw_headers = rows[0]
+    headers = [str(h).strip().lower() if h is not None else "" for h in raw_headers]
+
+    # Accept "field_name" as alias for "field_key"
+    headers = ["field_key" if h == "field_name" else h for h in headers]
+
+    missing = {"field_key", "label"} - set(headers)
+    if missing:
+        raise ValueError(
+            f"'{template_name}.xlsx' is missing required columns: {missing}. "
+            f"Found: {[h for h in headers if h]}"
+        )
 
     def col(row: tuple, name: str, default: Any = "") -> Any:
         try:
@@ -109,13 +114,22 @@ def _parse_excel_for_template(raw_bytes: bytes, template_id: str) -> list[dict]:
         label = str(col(row, "label", "")).strip()
         if not fkey or not label:
             continue
+
+        ft = str(col(row, "field_type", "text")).strip().lower() or "text"
+        if ft not in ("text", "date", "number", "dropdown"):
+            logger.warning(
+                "Unknown field_type '%s' for field '%s' in %s — defaulting to 'text'",
+                ft, fkey, template_name,
+            )
+            ft = "text"
+
         fields.append({
             "field_key":   fkey,
             "label":       label,
-            "field_type":  str(col(row, "field_type", "text")).strip().lower() or "text",
+            "field_type":  ft,
             "placeholder": str(col(row, "placeholder", "")).strip(),
-            "required":    _bool_from_cell(col(row, "required", True)),
-            "readonly":    _bool_from_cell(col(row, "readonly", False)),
+            "required":    _bool_from_cell(col(row, "required", None), default=True),
+            "readonly":    _bool_from_cell(col(row, "readonly", None), default=False),
             "order":       int(col(row, "order", 999)),
         })
 
@@ -123,75 +137,179 @@ def _parse_excel_for_template(raw_bytes: bytes, template_id: str) -> list[dict]:
     return fields
 
 
-def _fetch_from_azure() -> tuple[dict[str, list[dict]], str]:
-    """
-    Download template1.xlsx and template2.xlsx from the excel folder in Azure.
-    Falls back gracefully per-template if a file is missing.
-    Returns (schema_dict, source_label).
-    """
+def _enrich_with_db(fields: list[dict], db: dict) -> list[dict]:
+    """Merge raw field defs with JSON DB values/options."""
+    enriched = []
+    for f in fields:
+        key = f["field_key"]
+        db_val = db.get(key)
+        entry: dict = {
+            "field_name":   key,
+            "label":        f["label"],
+            "field_type":   f["field_type"],
+            "placeholder":  f["placeholder"],
+            "required":     f["required"],
+            "readonly":     f["readonly"],
+            "order":        f["order"],
+        }
+
+        if f["field_type"] == "dropdown":
+            if isinstance(db_val, list) and len(db_val) > 0:
+                entry["options"] = db_val
+            else:
+                if db_val is not None:
+                    logger.warning(
+                        "JSON DB key '%s' is not a list (got %s) — no options for dropdown",
+                        key, type(db_val).__name__,
+                    )
+                entry["options"] = []
+            entry["default_value"] = None
+        else:
+            if db_val is not None and not isinstance(db_val, list):
+                entry["default_value"] = str(db_val)
+            else:
+                entry["default_value"] = None
+
+        enriched.append(entry)
+    return enriched
+
+
+# ---------------------------------------------------------------------------
+# Azure / local file access
+# ---------------------------------------------------------------------------
+
+def _fetch_excel_bytes(template_name: str) -> bytes:
     from app.core.config import settings
 
     conn_str = settings.azure_storage_connection_string
     container = settings.azure_blob_container_name
     folder = settings.azure_excel_folder.rstrip("/")
 
-    if not conn_str:
-        logger.info("Azure not configured — using fallback schema")
-        return _FALLBACK, "fallback"
+    if conn_str:
+        try:
+            from azure.storage.blob import BlobServiceClient
+            blob_name = f"{folder}/{template_name}.xlsx"
+            client = BlobServiceClient.from_connection_string(conn_str)
+            blob_client = client.get_blob_client(container=container, blob=blob_name)
+            raw = blob_client.download_blob().readall()
+            logger.info("Loaded '%s' from Azure: %s", template_name, blob_name)
+            return raw
+        except Exception as e:
+            logger.warning(
+                "Azure fetch failed for '%s.xlsx': %s — trying local fallback",
+                template_name, str(e),
+            )
 
-    try:
-        from azure.storage.blob import BlobServiceClient
+    local_path = os.path.join(_LOCAL_EXCEL_DIR, f"{template_name}.xlsx")
+    if os.path.exists(local_path):
+        with open(local_path, "rb") as fh:
+            logger.info("Loaded '%s' from local file: %s", template_name, local_path)
+            return fh.read()
 
-        client = BlobServiceClient.from_connection_string(conn_str)
-        schema: dict[str, list[dict]] = {}
-        any_from_azure = False
-
-        for tmpl_id in ("1", "2"):
-            blob_name = f"{folder}/template{tmpl_id}.xlsx"
-            try:
-                blob_client = client.get_blob_client(container=container, blob=blob_name)
-                raw = blob_client.download_blob().readall()
-                fields = _parse_excel_for_template(raw, tmpl_id)
-                schema[tmpl_id] = fields
-                any_from_azure = True
-                logger.info("Loaded template%s schema from %s (%d fields)", tmpl_id, blob_name, len(fields))
-            except Exception as e:
-                logger.warning("Could not load %s: %s — using fallback for template %s", blob_name, str(e), tmpl_id)
-                schema[tmpl_id] = _FALLBACK[tmpl_id]
-
-        source = "azure" if any_from_azure else "fallback"
-        return schema, source
-
-    except Exception as e:
-        logger.warning("Azure connection failed (%s) — using full fallback", str(e))
-        return _FALLBACK, "fallback"
+    raise FileNotFoundError(
+        f"Template '{template_name}' not found in Azure "
+        f"(folder: {folder}) or local ({local_path})"
+    )
 
 
-def get_template_schema(force_refresh: bool = False) -> dict:
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def list_templates(force_refresh: bool = False) -> list[str]:
     """
-    Return the cached template schema, refreshing from Azure if the TTL has expired.
-
-    Returns:
-        {
-            "templates": {"1": [...fields...], "2": [...fields...]},
-            "source": "azure" | "fallback",
-            "cached_at": <unix timestamp>,
-        }
+    Return all available template names (Excel filenames without extension).
+    Checks Azure first, falls back to local backend/data/excel/ folder.
+    Results are cached for schema_cache_ttl_seconds.
     """
     from app.core.config import settings
 
     now = time.time()
     ttl = settings.schema_cache_ttl_seconds
 
-    if force_refresh or _cache["data"] is None or (now - _cache["fetched_at"]) > ttl:
-        schema, source = _fetch_from_azure()
-        _cache["data"] = schema
-        _cache["fetched_at"] = now
-        _cache["source"] = source
-        logger.info("Schema cache refreshed (source=%s)", source)
+    if (
+        not force_refresh
+        and _list_cache["data"] is not None
+        and (now - _list_cache["fetched_at"]) < ttl
+    ):
+        return _list_cache["data"]
 
-    return {
-        "templates": _cache["data"],
-        "source": _cache["source"],
-        "cached_at": _cache["fetched_at"],
-    }
+    templates: list[str] = []
+    conn_str = settings.azure_storage_connection_string
+    container = settings.azure_blob_container_name
+    folder = settings.azure_excel_folder.rstrip("/")
+
+    if conn_str:
+        try:
+            from azure.storage.blob import BlobServiceClient
+            client = BlobServiceClient.from_connection_string(conn_str)
+            cc = client.get_container_client(container)
+            prefix = f"{folder}/"
+            for blob in cc.list_blobs(name_starts_with=prefix):
+                name = blob.name[len(prefix):]
+                if name.lower().endswith(".xlsx") and "/" not in name:
+                    templates.append(name[:-5])
+            logger.info("Azure template list (%d): %s", len(templates), templates)
+        except Exception as e:
+            logger.warning("Azure template listing failed: %s", str(e))
+
+    if not templates and os.path.isdir(_LOCAL_EXCEL_DIR):
+        for fname in sorted(os.listdir(_LOCAL_EXCEL_DIR)):
+            if fname.lower().endswith(".xlsx"):
+                templates.append(fname[:-5])
+        logger.info("Local template list (%d): %s", len(templates), templates)
+
+    templates.sort()
+    _list_cache["data"] = templates
+    _list_cache["fetched_at"] = now
+    return templates
+
+
+def get_template_fields(template_name: str, force_refresh: bool = False) -> dict:
+    """
+    Return field definitions for a template, enriched with JSON DB values.
+
+    Returns:
+        {
+            "template_name": "...",
+            "fields": [
+                {field_name, label, field_type, placeholder, required, readonly, order,
+                 default_value (text/date/number) or options (dropdown)}
+            ]
+        }
+
+    Raises:
+        FileNotFoundError if the template Excel is not found.
+        ValueError if the Excel cannot be parsed.
+    """
+    from app.core.config import settings
+
+    now = time.time()
+    ttl = settings.schema_cache_ttl_seconds
+    cached = _fields_cache.get(template_name)
+
+    if (
+        not force_refresh
+        and cached is not None
+        and (now - cached["fetched_at"]) < ttl
+    ):
+        return cached["data"]
+
+    raw = _fetch_excel_bytes(template_name)
+    fields = _parse_excel_bytes(raw, template_name)
+    db = _read_json_db()
+    enriched = _enrich_with_db(fields, db)
+
+    result = {"template_name": template_name, "fields": enriched}
+    _fields_cache[template_name] = {"data": result, "fetched_at": now}
+    logger.info("Template '%s' loaded: %d fields", template_name, len(enriched))
+    return result
+
+
+def invalidate_cache(template_name: str | None = None) -> None:
+    """Force cache expiry. Pass None to clear everything."""
+    if template_name is None:
+        _list_cache["data"] = None
+        _fields_cache.clear()
+    else:
+        _fields_cache.pop(template_name, None)

@@ -1,0 +1,26 @@
+{
+  "_comment": "Shared values database for all templates. For dropdown fields, provide a list of options. For normal fields, provide a default string value.",
+  "distributed_by": "Distributed by:\nKenvue Brands LLC\nSummit, NJ 07901\n\n© Kenvue Brands LLC 2026",
+  "country_of_origin_active": "N/A",
+  "special_requirements": "N/A",
+  "storage_requirements": [
+    "Store below 25°C",
+    "Store between 2°C and 8°C",
+    "Store in a cool and dry place",
+    "Store in refrigerator (2°C to 8°C)",
+    "Store at room temperature (15°C to 30°C)"
+  ],
+  "package_type": [
+    "Bottle",
+    "Carton",
+    "Pouch",
+    "Blister Pack",
+    "Tube"
+  ],
+  "shipping_mode": [
+    "Air",
+    "Road",
+    "Sea",
+    "Rail"
+  ]
+}

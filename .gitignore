@@ -1,5 +1,3 @@
-# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
-
 # compiled output
 dist
 tmp
@@ -10,17 +8,34 @@ out-tsc
 
 # dependencies
 node_modules
+.pnpm-store/
 
-# IDEs and editors
-/.idea
+# Python virtual environments
+venv/
+.venv/
+env/
+
+# Python cache
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Environment variables and secrets
+.env
+.env.*
+!.env.example
+
+# Build output
+artifacts/frontend/dist/
+
+# IDE
+.idea
 .project
 .classpath
 .c9/
 *.launch
 .settings/
 *.sublime-workspace
-
-# IDE - VSCode
 .vscode/*
 !.vscode/settings.json
 !.vscode/tasks.json
@@ -31,19 +46,19 @@ node_modules
 /.sass-cache
 /connect.lock
 /coverage
-/libpeerconnection.log
 npm-debug.log
 yarn-error.log
-testem.log
-/typings
 
 # System Files
 .DS_Store
 Thumbs.db
 
-.cursor/rules/nx-rules.mdc
-.github/instructions/nx.instructions.md
+# Generated PDFs and temp files
+*.pdf
+!/backend/templates/*.pdf
 
-# Replit
+# Replit-specific (safe to exclude for local clones)
 .cache/
 .local/
+.cursor/rules/nx-rules.mdc
+.github/instructions/nx.instructions.md

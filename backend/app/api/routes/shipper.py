@@ -12,13 +12,13 @@ from fastapi.responses import FileResponse
 
 from app.models.schemas import (
     DISTRIBUTED_BY,
+    DynamicShipperInput,
     ErrorResponse,
     ExtractResponse,
     FileListResponse,
     GenerateResponse,
     MissingField,
     ShipperData,
-    ShipperDataInput,
 )
 from app.services.validation import get_missing_fields
 from app.services.azure_storage import (
@@ -29,15 +29,12 @@ from app.services.azure_storage import (
 )
 from app.services.database import DatabaseUnavailableError, MaterialNotFoundError, get_material_details
 from app.services.extractor import ExtractionError, extract_formula_data, extract_storage_data
-from app.services.pdf_generator import PDFGenerationError, fill_template
-from app.services.pdf_generator_template2 import fill_template2
+from app.services.pdf_generator_dynamic import PDFGenerationError, generate_dynamic_pdf
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-TEMPLATE_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "..", "templates", "shipper_template.pdf")
 
 _generated_files: dict[str, str] = {}
 _upload_status: dict[str, str] = {}  # "uploading" | "uploaded" | "failed"
@@ -45,31 +42,24 @@ _upload_status: dict[str, str] = {}  # "uploading" | "uploaded" | "failed"
 
 def _validate_pdf(file: UploadFile) -> None:
     if file.content_type not in ("application/pdf", "application/octet-stream"):
-        raise HTTPException(
-            status_code=415,
-            detail="Only PDF files are accepted",
-        )
+        raise HTTPException(status_code=415, detail="Only PDF files are accepted")
     if not (file.filename or "").lower().endswith(".pdf"):
-        raise HTTPException(
-            status_code=415,
-            detail="File must have a .pdf extension",
-        )
+        raise HTTPException(status_code=415, detail="File must have a .pdf extension")
 
 
 def _sanitize_path_segment(value: str) -> str:
-    return re.sub(r"[^a-zA-Z0-9_\-]", "_", value)
+    return re.sub(r"[^a-zA-Z0-9_\-]", "_", value) or "unknown"
 
 
 async def _upload_to_azure_background(output_path: str, blob_name: str, document_id: str) -> None:
-    """Upload the generated PDF to Azure in the background (non-blocking)."""
     _upload_status[document_id] = "uploading"
     try:
         await asyncio.to_thread(upload_pdf_to_blob, output_path, blob_name)
         _upload_status[document_id] = "uploaded"
-        logger.info("Background Azure upload completed for document %s → %s", document_id, blob_name)
+        logger.info("Azure upload completed: %s → %s", document_id, blob_name)
     except Exception as e:
         _upload_status[document_id] = "failed"
-        logger.error("Background Azure upload failed for document %s: %s", document_id, str(e))
+        logger.error("Azure upload failed for %s: %s", document_id, str(e))
 
 
 @router.post("/shipper/extract", response_model=ExtractResponse)
@@ -97,32 +87,29 @@ async def extract_shipper_data(
     if len(storage_bytes) < 4 or storage_bytes[:4] != b"%PDF":
         raise HTTPException(status_code=415, detail="storage_pdf does not appear to be a valid PDF")
 
-    # DB lookup is best-effort — any material number is accepted
     db_data: dict = {}
     try:
         db_data = get_material_details(material_number.strip())
     except MaterialNotFoundError:
-        logger.info("Material number '%s' not in DB — user will fill fields manually", material_number)
-    except (DatabaseUnavailableError, Exception) as e:
+        logger.info("Material '%s' not in DB — user will fill fields manually", material_number)
+    except Exception as e:
         logger.warning("DB lookup skipped: %s", str(e))
 
     try:
         formula_data = extract_formula_data(formula_bytes)
     except ExtractionError as e:
-        logger.error("Formula extraction failed: %s", str(e))
         raise HTTPException(status_code=422, detail="Failed to extract data from Master Formula PDF")
     except Exception as e:
-        logger.error("Unexpected extraction error: %s", str(e))
-        raise HTTPException(status_code=500, detail="An unexpected error occurred during formula extraction")
+        logger.error("Unexpected formula extraction error: %s", str(e))
+        raise HTTPException(status_code=500, detail="Unexpected error during formula extraction")
 
     try:
         storage_data = extract_storage_data(storage_bytes)
     except ExtractionError as e:
-        logger.error("Storage extraction failed: %s", str(e))
         raise HTTPException(status_code=422, detail="Failed to extract data from Storage and Shipping PDF")
     except Exception as e:
-        logger.error("Unexpected extraction error: %s", str(e))
-        raise HTTPException(status_code=500, detail="An unexpected error occurred during storage extraction")
+        logger.error("Unexpected storage extraction error: %s", str(e))
+        raise HTTPException(status_code=500, detail="Unexpected error during storage extraction")
 
     combined = ShipperData(
         product_name=db_data.get("product_name", ""),
@@ -141,37 +128,51 @@ async def extract_shipper_data(
     raw_missing = get_missing_fields(combined.model_dump())
     missing = [MissingField(field=f, label=lbl) for f, lbl in raw_missing]
 
-    if missing:
-        logger.warning(
-            "Extraction incomplete — %d field(s) need manual entry: %s",
-            len(missing),
-            [m.field for m in missing],
-        )
-
     return ExtractResponse(success=True, data=combined, missing_fields=missing)
 
 
 @router.post("/shipper/generate", response_model=GenerateResponse)
 async def generate_shipper_label(
-    input_data: ShipperDataInput,
+    input_data: DynamicShipperInput,
     background_tasks: BackgroundTasks,
 ) -> GenerateResponse:
     """
-    Generate the shipper label PDF and schedule Azure upload as a background task.
-    Returns immediately after PDF generation so the frontend never times out.
+    Generate a shipper label PDF for any dynamic template.
+
+    The template name determines which Excel field definitions are loaded
+    to build the PDF. All submitted field values are passed through.
     """
-    final_data = input_data.model_dump()
-    final_data["distributed_by"] = DISTRIBUTED_BY
+    all_values: dict = input_data.model_dump()
+    template_name: str = all_values.get("template", "unknown")
+
+    # Always stamp distributed_by
+    if not all_values.get("distributed_by"):
+        all_values["distributed_by"] = DISTRIBUTED_BY
+
+    # Resolve template field definitions for PDF labels
+    fields: list[dict] = []
+    try:
+        from app.services.excel_schema import get_template_fields
+        schema = get_template_fields(template_name)
+        fields = schema.get("fields", [])
+    except FileNotFoundError:
+        logger.warning("Template '%s' not found — generating PDF with raw values", template_name)
+        # Build minimal field list from submitted keys
+        fields = [
+            {"field_name": k, "label": k.replace("_", " ").title(), "field_type": "text"}
+            for k in all_values
+            if k not in ("template",)
+        ]
+    except Exception as e:
+        logger.error("Could not load template fields for PDF: %s", str(e))
+        fields = []
 
     document_id = str(uuid.uuid4())
     tmp_dir = tempfile.mkdtemp()
     output_path = os.path.join(tmp_dir, f"{document_id}.pdf")
 
     try:
-        if input_data.template == "2":
-            fill_template2(final_data, output_path)
-        else:
-            fill_template(final_data, TEMPLATE_PATH, output_path)
+        generate_dynamic_pdf(template_name, fields, all_values, output_path)
     except PDFGenerationError as e:
         logger.error("PDF generation failed: %s", str(e))
         shutil.rmtree(tmp_dir, ignore_errors=True)
@@ -179,25 +180,22 @@ async def generate_shipper_label(
     except Exception as e:
         logger.error("Unexpected PDF error: %s", str(e))
         shutil.rmtree(tmp_dir, ignore_errors=True)
-        raise HTTPException(status_code=500, detail="An unexpected error occurred during PDF generation")
+        raise HTTPException(status_code=500, detail="Unexpected error during PDF generation")
 
-    mat = _sanitize_path_segment(input_data.material_number)
-    batch = _sanitize_path_segment(input_data.batch_number)
+    mat = _sanitize_path_segment(str(all_values.get("material_number", "unknown")))
+    batch = _sanitize_path_segment(str(all_values.get("batch_number", "unknown")))
     folder = settings.azure_blob_target_folder
-    blob_name = f"{folder}/{mat}/{batch}/final_shipper.pdf"
+    blob_name = f"{folder}/{mat}/{batch}/{template_name}_shipper.pdf"
 
     _generated_files[document_id] = output_path
     _upload_status[document_id] = "uploading"
-
     background_tasks.add_task(_upload_to_azure_background, output_path, blob_name, document_id)
-
-    logger.info("Shipper label generated, Azure upload queued in background: %s", blob_name)
 
     return GenerateResponse(
         success=True,
         message="Shipper label generated successfully",
         document_id=document_id,
-        file_name="final_shipper.pdf",
+        file_name=f"{template_name}_shipper.pdf",
         blob_path=blob_name,
         download_url=f"/api/v1/shipper/download/{document_id}",
     )
@@ -205,68 +203,44 @@ async def generate_shipper_label(
 
 @router.get("/shipper/status/{document_id}")
 async def get_upload_status(document_id: str) -> dict:
-    """Check the Azure upload status for a generated document."""
     if not re.match(r"^[a-f0-9\-]{36}$", document_id):
         raise HTTPException(status_code=400, detail="Invalid document ID")
-    status = _upload_status.get(document_id, "unknown")
-    return {"document_id": document_id, "status": status}
+    return {"document_id": document_id, "status": _upload_status.get(document_id, "unknown")}
 
 
 @router.get("/shipper/download/{document_id}")
 async def download_shipper_label(document_id: str) -> FileResponse:
     if not re.match(r"^[a-f0-9\-]{36}$", document_id):
         raise HTTPException(status_code=400, detail="Invalid document ID")
-
     file_path = _generated_files.get(document_id)
     if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail="Document not found or has expired")
-
     return FileResponse(
         path=file_path,
         media_type="application/pdf",
-        filename="final_shipper.pdf",
-        headers={"Content-Disposition": 'attachment; filename="final_shipper.pdf"'},
+        filename="shipper_label.pdf",
+        headers={"Content-Disposition": 'attachment; filename="shipper_label.pdf"'},
     )
 
 
 @router.get("/shipper/files", response_model=FileListResponse)
 async def list_files_by_date_range(
-    start_date: str = Query(..., description="Start date in YYYY-MM-DD format"),
-    end_date: str = Query(..., description="End date in YYYY-MM-DD format (inclusive)"),
+    start_date: str = Query(..., description="Start date YYYY-MM-DD"),
+    end_date: str = Query(..., description="End date YYYY-MM-DD (inclusive)"),
 ) -> FileListResponse:
-    """
-    List all files in Azure Blob Storage that were last modified between start_date and end_date (inclusive).
-    """
     from datetime import datetime
-
     try:
         datetime.strptime(start_date, "%Y-%m-%d")
         datetime.strptime(end_date, "%Y-%m-%d")
     except ValueError:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid date format — use YYYY-MM-DD (e.g. 2026-01-01)",
-        )
-
+        raise HTTPException(status_code=400, detail="Invalid date format — use YYYY-MM-DD")
     if start_date > end_date:
-        raise HTTPException(
-            status_code=400,
-            detail="start_date must be on or before end_date",
-        )
-
+        raise HTTPException(status_code=400, detail="start_date must be on or before end_date")
     try:
         files = await asyncio.to_thread(list_blobs_by_date_range, start_date, end_date)
     except AzureUnavailableError as e:
-        logger.error("Azure unavailable for file listing: %s", str(e))
         raise HTTPException(status_code=503, detail="Azure Blob Storage is not available")
     except Exception as e:
         logger.error("Unexpected error listing blobs: %s", str(e))
-        raise HTTPException(status_code=500, detail="An unexpected error occurred listing files")
-
-    return FileListResponse(
-        success=True,
-        files=files,
-        total=len(files),
-        start_date=start_date,
-        end_date=end_date,
-    )
+        raise HTTPException(status_code=500, detail="Unexpected error listing files")
+    return FileListResponse(success=True, files=files, total=len(files), start_date=start_date, end_date=end_date)
