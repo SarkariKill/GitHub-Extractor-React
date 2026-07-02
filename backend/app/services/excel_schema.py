@@ -40,9 +40,9 @@ _DATA_DIR = os.path.normpath(
 _LOCAL_EXCEL_DIR = os.path.join(_DATA_DIR, "excel")
 _JSON_DB_PATH = os.path.join(_DATA_DIR, "template_values.json")
 
-_list_cache: dict[str, Any] = {"data": None, "fetched_at": 0.0}
+_list_cache: dict[str, Any] = {"data": None, "fetched_at": 0.0, "source": "none"}
 _fields_cache: dict[str, dict] = {}
-_db_cache: dict[str, Any] = {"data": None, "fetched_at": 0.0}
+_db_cache: dict[str, Any] = {"data": None, "fetched_at": 0.0, "source": "none"}
 
 
 # ---------------------------------------------------------------------------
@@ -286,7 +286,13 @@ def list_templates(force_refresh: bool = False) -> list[str]:
     ):
         return _list_cache["data"]
 
+    # force_refresh clears ALL caches so a single button click refreshes everything
+    if force_refresh:
+        _db_cache["data"] = None
+        _fields_cache.clear()
+
     templates: list[str] = []
+    source = "local"
     conn_str = settings.azure_storage_connection_string
     container = settings.azure_blob_container_name
     folder = settings.azure_excel_folder.rstrip("/")
@@ -301,6 +307,8 @@ def list_templates(force_refresh: bool = False) -> list[str]:
                 name = blob.name[len(prefix):]
                 if name.lower().endswith(".xlsx") and "/" not in name:
                     templates.append(name[:-5])
+            if templates:
+                source = "azure"
             logger.info("Azure template list (%d): %s", len(templates), templates)
         except Exception as e:
             logger.warning("Azure template listing failed: %s", str(e))
@@ -309,12 +317,19 @@ def list_templates(force_refresh: bool = False) -> list[str]:
         for fname in sorted(os.listdir(_LOCAL_EXCEL_DIR)):
             if fname.lower().endswith(".xlsx"):
                 templates.append(fname[:-5])
+        source = "local"
         logger.info("Local template list (%d): %s", len(templates), templates)
 
     templates.sort()
     _list_cache["data"] = templates
     _list_cache["fetched_at"] = now
+    _list_cache["source"] = source
     return templates
+
+
+def get_schema_source() -> str:
+    """Return the source of the last template list fetch: 'azure', 'local', or 'none'."""
+    return _list_cache.get("source", "none")
 
 
 def get_template_fields(template_name: str, force_refresh: bool = False) -> dict:

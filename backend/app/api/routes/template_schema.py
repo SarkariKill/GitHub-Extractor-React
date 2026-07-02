@@ -29,7 +29,8 @@ async def list_templates_endpoint(
     if not templates:
         logger.warning("No template Excel files found in Azure or local folder")
 
-    return JSONResponse(content={"templates": templates})
+    from app.services.excel_schema import get_schema_source
+    return JSONResponse(content={"templates": templates, "source": get_schema_source()})
 
 
 @router.get("/templates/fields")

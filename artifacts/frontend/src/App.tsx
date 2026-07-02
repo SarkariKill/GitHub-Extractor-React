@@ -62,25 +62,56 @@ export default function App() {
   const [uploadStatus, setUploadStatus] = useState<UploadStatus>("unknown");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
+  const [schemaSource, setSchemaSource] = useState<"azure" | "local" | "none">("none");
+  const [refreshing, setRefreshing] = useState(false);
+
+  async function loadTemplateList(forceRefresh = false) {
+    setTemplateListLoading(true);
+    setTemplateListError(null);
+    try {
+      const url = forceRefresh ? "/api/v1/templates/list?refresh=true" : "/api/v1/templates/list";
+      const res = await fetch(url);
+      const json = await res.json();
+      if (!res.ok) { setTemplateListError(json.detail || "Failed to load templates"); return; }
+      const list: string[] = json.templates ?? [];
+      setTemplateList(list);
+      setSchemaSource(json.source ?? "none");
+      if (list.length === 0) setTemplateListError("No template files found in the configured folder.");
+    } catch {
+      setTemplateListError("Cannot connect to the backend. Make sure the server is running.");
+    } finally {
+      setTemplateListLoading(false);
+    }
+  }
+
+  async function handleRefresh() {
+    setRefreshing(true);
+    try {
+      // One call busts list cache + DB cache + all field caches simultaneously
+      await loadTemplateList(true);
+      // Re-fetch fields for current template with fresh DB
+      if (selectedTemplate) {
+        setFieldsLoading(true);
+        try {
+          const res = await fetch(`/api/v1/templates/fields?template=${encodeURIComponent(selectedTemplate)}&refresh=true`);
+          const json = await res.json();
+          if (res.ok) setTemplateFields(json.fields ?? []);
+        } finally {
+          setFieldsLoading(false);
+        }
+      }
+      toast.success("Schema refreshed from Azure");
+    } catch {
+      toast.error("Refresh failed");
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   // Load template list on mount
   useEffect(() => {
-    async function load() {
-      setTemplateListLoading(true);
-      setTemplateListError(null);
-      try {
-        const res = await fetch("/api/v1/templates/list");
-        const json = await res.json();
-        if (!res.ok) { setTemplateListError(json.detail || "Failed to load templates"); return; }
-        const list: string[] = json.templates ?? [];
-        setTemplateList(list);
-        if (list.length === 0) setTemplateListError("No template files found in the configured folder.");
-      } catch {
-        setTemplateListError("Cannot connect to the backend. Make sure the server is running.");
-      } finally {
-        setTemplateListLoading(false);
-      }
-    }
-    load();
+    loadTemplateList();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Load fields when template changes
@@ -225,20 +256,47 @@ export default function App() {
           <h1 className="text-lg font-semibold text-gray-900">Shipper Label Generator</h1>
           <p className="text-xs text-gray-500">Kenvue — Internal Tool</p>
         </div>
-        <div className="ml-auto flex gap-2">
-          {steps.map((s, i) => (
-            <div key={s} className="flex items-center gap-1">
-              <div
-                className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                  i < steps.indexOf(step) ? "bg-green-500 text-white" : step !== s ? "bg-gray-200 text-gray-500" : "text-white"
-                }`}
-                style={step === s ? { backgroundColor: BRAND } : {}}
-              >
-                {i < steps.indexOf(step) ? "✓" : i + 1}
+        <div className="ml-auto flex items-center gap-3">
+          {/* Schema source badge + instant refresh */}
+          {schemaSource !== "none" && (
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing}
+              title="Click to refresh schema and database from Azure instantly"
+              className={`flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-full border transition-all ${
+                schemaSource === "azure"
+                  ? "border-green-300 text-green-700 bg-green-50 hover:bg-green-100"
+                  : "border-amber-300 text-amber-700 bg-amber-50 hover:bg-amber-100"
+              } disabled:opacity-60`}
+            >
+              {refreshing ? (
+                <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                </svg>
+              ) : (
+                <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+                </svg>
+              )}
+              Schema: {schemaSource === "azure" ? "Azure" : "local"}
+            </button>
+          )}
+          <div className="flex gap-2">
+            {steps.map((s, i) => (
+              <div key={s} className="flex items-center gap-1">
+                <div
+                  className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
+                    i < steps.indexOf(step) ? "bg-green-500 text-white" : step !== s ? "bg-gray-200 text-gray-500" : "text-white"
+                  }`}
+                  style={step === s ? { backgroundColor: BRAND } : {}}
+                >
+                  {i < steps.indexOf(step) ? "✓" : i + 1}
+                </div>
+                {i < 2 && <div className="w-8 h-px bg-gray-200" />}
               </div>
-              {i < 2 && <div className="w-8 h-px bg-gray-200" />}
-            </div>
-          ))}
+            ))}
+          </div>
         </div>
       </header>
 
