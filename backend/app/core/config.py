@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     cors_origins: str = "*"
     max_file_size_mb: int = 50
     azure_excel_folder: str = "excel"
+    azure_config_folder: str = "config"
     schema_cache_ttl_seconds: int = 300  # 5-minute cache
 
     model_config = {"env_file": ".env", "extra": "ignore"}

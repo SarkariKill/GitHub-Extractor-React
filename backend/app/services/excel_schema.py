@@ -42,25 +42,77 @@ _JSON_DB_PATH = os.path.join(_DATA_DIR, "template_values.json")
 
 _list_cache: dict[str, Any] = {"data": None, "fetched_at": 0.0}
 _fields_cache: dict[str, dict] = {}
+_db_cache: dict[str, Any] = {"data": None, "fetched_at": 0.0}
 
 
 # ---------------------------------------------------------------------------
-# JSON database
+# JSON database — loaded from Azure config folder, local file as fallback
 # ---------------------------------------------------------------------------
 
-def _read_json_db() -> dict:
-    if not os.path.exists(_JSON_DB_PATH):
-        logger.warning("template_values.json not found at %s", _JSON_DB_PATH)
-        return {}
-    try:
-        with open(_JSON_DB_PATH, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except json.JSONDecodeError as e:
-        logger.error("Invalid JSON in template_values.json: %s", str(e))
-        return {}
-    except Exception as e:
-        logger.error("Could not read template_values.json: %s", str(e))
-        return {}
+def _read_json_db(force_refresh: bool = False) -> dict:
+    """
+    Fetch template_values.json from:
+      1. Azure Blob: {container}/{azure_config_folder}/template_values.json
+      2. Local fallback: backend/data/template_values.json
+
+    Result is cached for schema_cache_ttl_seconds.
+    """
+    from app.core.config import settings
+
+    now = time.time()
+    ttl = settings.schema_cache_ttl_seconds
+
+    if (
+        not force_refresh
+        and _db_cache["data"] is not None
+        and (now - _db_cache["fetched_at"]) < ttl
+    ):
+        return _db_cache["data"]
+
+    data: dict | None = None
+
+    # 1. Try Azure
+    conn_str = settings.azure_storage_connection_string
+    if conn_str:
+        try:
+            from azure.storage.blob import BlobServiceClient
+            blob_name = f"{settings.azure_config_folder.rstrip('/')}/template_values.json"
+            client = BlobServiceClient.from_connection_string(conn_str)
+            blob_client = client.get_blob_client(
+                container=settings.azure_blob_container_name, blob=blob_name
+            )
+            raw = blob_client.download_blob().readall()
+            data = json.loads(raw.decode("utf-8"))
+            logger.info("Loaded template_values.json from Azure: %s", blob_name)
+        except json.JSONDecodeError as e:
+            logger.error("Invalid JSON in Azure template_values.json: %s", str(e))
+        except Exception as e:
+            logger.warning(
+                "Could not fetch template_values.json from Azure: %s — trying local", str(e)
+            )
+
+    # 2. Local fallback
+    if data is None:
+        if os.path.exists(_JSON_DB_PATH):
+            try:
+                with open(_JSON_DB_PATH, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                logger.info("Loaded template_values.json from local file: %s", _JSON_DB_PATH)
+            except json.JSONDecodeError as e:
+                logger.error("Invalid JSON in local template_values.json: %s", str(e))
+                data = {}
+            except Exception as e:
+                logger.error("Could not read local template_values.json: %s", str(e))
+                data = {}
+        else:
+            logger.warning(
+                "template_values.json not found in Azure or locally (%s)", _JSON_DB_PATH
+            )
+            data = {}
+
+    _db_cache["data"] = data
+    _db_cache["fetched_at"] = now
+    return data
 
 
 # ---------------------------------------------------------------------------
@@ -297,7 +349,7 @@ def get_template_fields(template_name: str, force_refresh: bool = False) -> dict
 
     raw = _fetch_excel_bytes(template_name)
     fields = _parse_excel_bytes(raw, template_name)
-    db = _read_json_db()
+    db = _read_json_db(force_refresh=force_refresh)
     enriched = _enrich_with_db(fields, db)
 
     result = {"template_name": template_name, "fields": enriched}
@@ -307,9 +359,11 @@ def get_template_fields(template_name: str, force_refresh: bool = False) -> dict
 
 
 def invalidate_cache(template_name: str | None = None) -> None:
-    """Force cache expiry. Pass None to clear everything."""
+    """Force cache expiry. Pass None to clear everything (list + fields + db)."""
     if template_name is None:
         _list_cache["data"] = None
         _fields_cache.clear()
+        _db_cache["data"] = None
     else:
         _fields_cache.pop(template_name, None)
+        _db_cache["data"] = None  # always refresh DB when a specific template is refreshed
