@@ -1,0 +1,51 @@
+(base) apple@Apples-MacBook-Air-4 GitHub-Extractor-React % cd ..
+(base) apple@Apples-MacBook-Air-4 final_shipper_extractor_full_codebase % cd GitHub-Extractor-React
+(base) apple@Apples-MacBook-Air-4 GitHub-Extractor-React % git status
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+        modified:   .npmrc
+        modified:   package.json
+        modified:   pnpm-lock.yaml
+        modified:   pnpm-workspace.yaml
+
+no changes added to commit (use "git add" and/or "git commit -a")
+(base) apple@Apples-MacBook-Air-4 GitHub-Extractor-React % git pull origin main
+remote: Enumerating objects: 16, done.
+remote: Counting objects: 100% (16/16), done.
+remote: Compressing objects: 100% (3/3), done.
+remote: Total 9 (delta 6), reused 9 (delta 6), pack-reused 0 (from 0)
+Unpacking objects: 100% (9/9), 1.91 KiB | 195.00 KiB/s, done.
+From https://github.com/SarkariKill/GitHub-Extractor-React
+ * branch            main       -> FETCH_HEAD
+   2c3a78a..e1efb5f  main       -> origin/main
+Updating 2c3a78a..e1efb5f
+Fast-forward
+ .gitignore                  |  1 +
+ .../api-server/src/index.ts |  8 +-
+ ...tracto_1783085110610.txt | 51 +++++++
+ 3 files changed, 53 insertions(+), 7 deletions(-)
+ create mode 100644 attached_assets/Pasted--base-apple-Apples-MacBook-Air-4-final-shipper-extracto_1783085110610.txt
+(base) apple@Apples-MacBook-Air-4 GitHub-Extractor-React % git rm -r --cached artifacts/api-server/.replit-artifact
+git rm -r --cached artifacts/frontend/.replit-artifact
+git commit -m "Remove Replit-specific artifact config from repo"
+git push
+rm 'artifacts/api-server/.replit-artifact/artifact.toml'
+rm 'artifacts/frontend/.replit-artifact/artifact.toml'
+[main d1c7319] Remove Replit-specific artifact config from repo
+ 2 files changed, 59 deletions(-)
+ delete mode 100644 artifacts/api-server/.replit-artifact/artifact.toml
+ delete mode 100644 artifacts/frontend/.replit-artifact/artifact.toml
+Enumerating objects: 9, done.
+Counting objects: 100% (9/9), done.
+Delta compression using up to 8 threads
+Compressing objects: 100% (5/5), done.
+Writing objects: 100% (5/5), 444 bytes | 444.00 KiB/s, done.
+Total 5 (delta 3), reused 0 (delta 0), pack-reused 0 (from 0)
+remote: Resolving deltas: 100% (3/3), completed with 3 local objects.
+To https://github.com/SarkariKill/GitHub-Extractor-React
+   e1efb5f..d1c7319  main -> main
+(base) apple@Apples-MacBook-Air-4 GitHub-Extractor-React % 
