@@ -182,8 +182,9 @@ async def generate_shipper_label(
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail="Unexpected error during PDF generation")
 
-    from datetime import datetime
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    from datetime import datetime, timezone, timedelta
+    ist = timezone(timedelta(hours=5, minutes=30))
+    timestamp = datetime.now(ist).strftime("%Y%m%d_%H%M%S")
     blob_name = f"final_generated_shipped_pdf/final_shipper_pdf_{timestamp}.pdf"
 
     _generated_files[document_id] = output_path
