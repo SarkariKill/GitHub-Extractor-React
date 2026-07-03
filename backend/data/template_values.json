@@ -1,6 +1,6 @@
 {
   "_comment": "Shared values database for all templates. For dropdown fields, provide a list of options. For normal fields, provide a default string value.",
-  "distributed_by": "Distributed by:\nKenvue Brands LLC\nSummit, NJ 07901\n\n© Kenvue Brands LLC 2026",
+  "distributed_by": "Distributed by:\nTCS\n\n© TCS 2026",
   "country_of_origin_active": "N/A",
   "special_requirements": "N/A",
   "storage_requirements": [

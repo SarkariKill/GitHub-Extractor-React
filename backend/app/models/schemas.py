@@ -3,9 +3,9 @@ from pydantic import BaseModel, ConfigDict, field_validator
 
 DISTRIBUTED_BY = (
     "Distributed by:\n"
-    "Kenvue Brands LLC\n"
-    "Summit, NJ 07901\n\n"
-    "© Kenvue Brands LLC 2026"
+    "TCS\n"
+    "\n"
+    "© TCS 2026"
 )
 
 

@@ -1,4 +1,4 @@
-# Kenvue Shipper Label Generator
+# TCS Shipper Label Generator
 
 A web application for generating shipper labels from PDF documents using OCR extraction.
 

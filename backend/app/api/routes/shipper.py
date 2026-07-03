@@ -182,10 +182,9 @@ async def generate_shipper_label(
         shutil.rmtree(tmp_dir, ignore_errors=True)
         raise HTTPException(status_code=500, detail="Unexpected error during PDF generation")
 
-    mat = _sanitize_path_segment(str(all_values.get("material_number", "unknown")))
-    batch = _sanitize_path_segment(str(all_values.get("batch_number", "unknown")))
-    folder = settings.azure_blob_target_folder
-    blob_name = f"{folder}/{mat}/{batch}/{template_name}_shipper.pdf"
+    from datetime import datetime
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    blob_name = f"final_generated_shipped_pdf/final_shipper_pdf_{timestamp}.pdf"
 
     _generated_files[document_id] = output_path
     _upload_status[document_id] = "uploading"
