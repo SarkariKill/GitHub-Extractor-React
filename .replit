@@ -20,14 +20,6 @@ author = "agent"
 task = "workflow.run"
 args = "FastAPI Backend"
 
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "artifacts/api-server: API Server"
-
-[[workflows.workflow.tasks]]
-task = "workflow.run"
-args = "artifacts/frontend: web"
-
 [[workflows.workflow]]
 name = "FastAPI Backend"
 author = "agent"
@@ -39,29 +31,6 @@ waitForPort = 8000
 
 [workflows.workflow.metadata]
 outputType = "console"
-
-[[workflows.workflow]]
-name = "artifacts/api-server: API Server"
-author = "agent"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm --filter @workspace/api-server run dev"
-waitForPort = 8080
-
-[workflows.workflow.metadata]
-outputType = "console"
-
-[[workflows.workflow]]
-name = "artifacts/frontend: web"
-author = "agent"
-
-[workflows.workflow.metadata]
-outputType = "webview"
-
-[[workflows.workflow.tasks]]
-task = "shell.exec"
-args = "pnpm --filter @workspace/frontend run dev"
 
 [agent]
 stack = "PNPM_WORKSPACE"
