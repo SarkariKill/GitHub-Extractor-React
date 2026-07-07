@@ -34,6 +34,7 @@ interface GenerateResponse {
 }
 
 export default function App() {
+  const [view, setView] = useState<"main" | "files">("main");
   const [step, setStep] = useState<Step>("upload");
 
   // Template list
@@ -257,8 +258,24 @@ export default function App() {
           <p className="text-xs text-gray-500">TCS — Internal Tool</p>
         </div>
         <div className="ml-auto flex items-center gap-3">
+          {/* Generated Files viewer button */}
+          <button
+            onClick={() => setView(v => v === "files" ? "main" : "files")}
+            title="View all generated shipper label PDFs"
+            className={`flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border transition-all ${
+              view === "files"
+                ? "border-blue-400 text-blue-700 bg-blue-50"
+                : "border-gray-300 text-gray-600 bg-white hover:bg-gray-50"
+            }`}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M3 7h18M3 12h18M3 17h18" />
+            </svg>
+            {view === "files" ? "← Back to Generator" : "Generated Files"}
+          </button>
+
           {/* Schema source badge + instant refresh */}
-          {schemaSource !== "none" && (
+          {view === "main" && schemaSource !== "none" && (
             <button
               onClick={handleRefresh}
               disabled={refreshing}
@@ -282,25 +299,29 @@ export default function App() {
               Schema: {schemaSource === "azure" ? "Azure" : "local"}
             </button>
           )}
-          <div className="flex gap-2">
-            {steps.map((s, i) => (
-              <div key={s} className="flex items-center gap-1">
-                <div
-                  className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
-                    i < steps.indexOf(step) ? "bg-green-500 text-white" : step !== s ? "bg-gray-200 text-gray-500" : "text-white"
-                  }`}
-                  style={step === s ? { backgroundColor: BRAND } : {}}
-                >
-                  {i < steps.indexOf(step) ? "✓" : i + 1}
+          {view === "main" && (
+            <div className="flex gap-2">
+              {steps.map((s, i) => (
+                <div key={s} className="flex items-center gap-1">
+                  <div
+                    className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-medium ${
+                      i < steps.indexOf(step) ? "bg-green-500 text-white" : step !== s ? "bg-gray-200 text-gray-500" : "text-white"
+                    }`}
+                    style={step === s ? { backgroundColor: BRAND } : {}}
+                  >
+                    {i < steps.indexOf(step) ? "✓" : i + 1}
+                  </div>
+                  {i < 2 && <div className="w-8 h-px bg-gray-200" />}
                 </div>
-                {i < 2 && <div className="w-8 h-px bg-gray-200" />}
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          )}
         </div>
       </header>
 
-      <main className="max-w-2xl mx-auto px-4 py-8 space-y-4">
+      {view === "files" && <GeneratedFilesPage onBack={() => setView("main")} />}
+
+      <main className={`max-w-2xl mx-auto px-4 py-8 space-y-4 ${view === "files" ? "hidden" : ""}`}>
 
         {/* STEP 1 — Upload */}
         {step === "upload" && (
@@ -602,6 +623,194 @@ function FindFilesByDateRange() {
               </>
           }
         </div>
+      )}
+    </div>
+  );
+}
+
+/* ─── Generated Files Page ─── */
+interface GeneratedFile {
+  name: string;
+  blob_name: string;
+  uploaded_at: string | null;
+  size_kb: number;
+}
+
+function GeneratedFilesPage({ onBack }: { onBack: () => void }) {
+  const [files, setFiles] = useState<GeneratedFile[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [downloading, setDownloading] = useState<string | null>(null);
+
+  async function loadFiles() {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch("/api/v1/generated-files/list");
+      const json = await res.json();
+      if (!res.ok) { setError(json.detail || "Failed to load files"); return; }
+      setFiles(json.files ?? []);
+    } catch {
+      setError("Cannot connect to the backend. Make sure the server is running.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => { loadFiles(); }, []);
+
+  async function handleDownload(file: GeneratedFile) {
+    setDownloading(file.blob_name);
+    try {
+      const res = await fetch(`/api/v1/generated-files/download?blob=${encodeURIComponent(file.blob_name)}`);
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}));
+        toast.error(json.detail || "Download failed");
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = file.name;
+      a.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast.error("Download failed — network error");
+    } finally {
+      setDownloading(null);
+    }
+  }
+
+  function formatDate(iso: string | null) {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleString("en-IN", {
+        day: "2-digit", month: "short", year: "numeric",
+        hour: "2-digit", minute: "2-digit", hour12: true, timeZone: "Asia/Kolkata",
+      }) + " IST";
+    } catch { return iso; }
+  }
+
+  function formatFileName(name: string) {
+    return name.replace("final_shipper_pdf_", "").replace(".pdf", "").replace(/_/g, "  ");
+  }
+
+  return (
+    <div className="max-w-4xl mx-auto px-4 py-8">
+      {/* Page header */}
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h2 className="text-xl font-semibold text-gray-900">Generated Shipper Labels</h2>
+          <p className="text-sm text-gray-500 mt-0.5">All PDFs saved in <code className="text-xs bg-gray-100 px-1.5 py-0.5 rounded font-mono">final_generated_shipped_pdf/</code></p>
+        </div>
+        <button
+          onClick={loadFiles}
+          disabled={loading}
+          className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg border border-gray-300 text-gray-600 bg-white hover:bg-gray-50 disabled:opacity-50 transition-all"
+        >
+          <svg className={`w-3.5 h-3.5 ${loading ? "animate-spin" : ""}`} fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0 3.181 3.183a8.25 8.25 0 0 0 13.803-3.7M4.031 9.865a8.25 8.25 0 0 1 13.803-3.7l3.181 3.182m0-4.991v4.99" />
+          </svg>
+          Refresh
+        </button>
+      </div>
+
+      {/* Error */}
+      {error && (
+        <div className="mb-4 rounded-xl border border-red-200 bg-red-50 px-4 py-3">
+          <p className="text-sm text-red-700">{error}</p>
+        </div>
+      )}
+
+      {/* Loading skeleton */}
+      {loading && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm divide-y divide-gray-100">
+          {[1, 2, 3, 4].map(i => (
+            <div key={i} className="px-5 py-4 flex items-center gap-4 animate-pulse">
+              <div className="w-8 h-8 rounded-lg bg-gray-100" />
+              <div className="flex-1 space-y-2">
+                <div className="h-3 bg-gray-200 rounded w-48" />
+                <div className="h-2.5 bg-gray-100 rounded w-32" />
+              </div>
+              <div className="h-7 w-20 bg-gray-100 rounded-lg" />
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Empty state */}
+      {!loading && !error && files.length === 0 && (
+        <div className="bg-white rounded-xl border border-gray-200 shadow-sm py-16 text-center">
+          <svg className="w-10 h-10 text-gray-300 mx-auto mb-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+          </svg>
+          <p className="text-sm font-medium text-gray-500">No generated PDFs found</p>
+          <p className="text-xs text-gray-400 mt-1">Files will appear here after you generate a shipper label.</p>
+        </div>
+      )}
+
+      {/* Files table */}
+      {!loading && files.length > 0 && (
+        <>
+          <p className="text-xs text-gray-400 mb-3">{files.length} file{files.length !== 1 ? "s" : ""} — newest first</p>
+          <div className="bg-white rounded-xl border border-gray-200 shadow-sm overflow-hidden">
+            {/* Table header */}
+            <div className="grid grid-cols-[1fr_auto_auto_auto] gap-4 px-5 py-2.5 bg-gray-50 border-b border-gray-200">
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide">File</span>
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide text-right">Size</span>
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide text-right">Generated (IST)</span>
+              <span className="text-xs font-semibold text-gray-500 uppercase tracking-wide text-right">Action</span>
+            </div>
+            {/* Rows */}
+            <div className="divide-y divide-gray-100">
+              {files.map((file) => (
+                <div key={file.blob_name} className="grid grid-cols-[1fr_auto_auto_auto] gap-4 px-5 py-3.5 items-center hover:bg-gray-50 transition-colors">
+                  {/* File info */}
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0" style={{ backgroundColor: "#f0f4ff" }}>
+                      <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="#3b82f6" strokeWidth={1.5}>
+                        <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+                      </svg>
+                    </div>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-gray-900 truncate">{file.name}</p>
+                      <p className="text-xs text-gray-400 font-mono">{formatFileName(file.name)}</p>
+                    </div>
+                  </div>
+                  {/* Size */}
+                  <span className="text-xs text-gray-500 text-right whitespace-nowrap">{file.size_kb} KB</span>
+                  {/* Date */}
+                  <span className="text-xs text-gray-500 text-right whitespace-nowrap">{formatDate(file.uploaded_at)}</span>
+                  {/* Download */}
+                  <button
+                    onClick={() => handleDownload(file)}
+                    disabled={downloading === file.blob_name}
+                    className="flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-lg text-white disabled:opacity-60 transition-opacity hover:opacity-90 whitespace-nowrap"
+                    style={{ backgroundColor: downloading === file.blob_name ? "#6b7280" : BRAND }}
+                  >
+                    {downloading === file.blob_name ? (
+                      <>
+                        <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"/>
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z"/>
+                        </svg>
+                        Downloading…
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+                          <path strokeLinecap="round" strokeLinejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3" />
+                        </svg>
+                        Download
+                      </>
+                    )}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </>
       )}
     </div>
   );
